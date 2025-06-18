@@ -313,32 +313,105 @@ public class StockService {
     }
 
     private boolean isUptrending(List<HistoricalPrice> data) {
-        if (data == null || data.size() < 5) {
+        if (data == null || data.size() < 10) { // Need at least 10 days of data
             return false;
         }
 
         try {
-            // Get the last 5 prices
-            List<Double> prices = data.subList(0, Math.min(5, data.size())).stream()
+            // Get valid prices in chronological order (oldest to newest)
+            List<Double> prices = data.stream()
+                .sorted((a, b) -> a.getDate().compareTo(b.getDate()))
                 .map(HistoricalPrice::getPrice)
-                .filter(price -> price != null)
+                .filter(price -> price != null && !Double.isNaN(price))
                 .collect(Collectors.toList());
 
-            if (prices.size() < 2) {
+            if (prices.size() < 10) {
                 return false;
             }
 
-            // Simple trend check: each price should be >= the next price
-            for (int i = 0; i < prices.size() - 1; i++) {
-                if (prices.get(i) < prices.get(i + 1)) {
-                    return false;
-                }
+            // Calculate 5-day and 10-day moving averages
+            List<Double> ma5 = calculateMovingAverage(prices, 5);
+            List<Double> ma10 = calculateMovingAverage(prices, 10);
+
+            if (ma5.isEmpty() || ma10.isEmpty()) {
+                return false;
             }
-            return true;
+
+            // Criteria for uptrend:
+            // 1. Current price > 5-day MA
+            // 2. 5-day MA > 10-day MA (shorter MA above longer MA indicates uptrend)
+            // 3. Current price > price from 5 days ago (higher highs)
+            // 4. Both MAs are sloping upward
+            double currentPrice = prices.get(prices.size() - 1);
+            double fiveDaysAgoPrice = prices.get(prices.size() - 6);
+            
+            boolean priceAboveMa5 = currentPrice > ma5.get(ma5.size() - 1);
+            boolean ma5AboveMa10 = ma5.get(ma5.size() - 1) > ma10.get(ma10.size() - 1);
+            boolean higherHigh = currentPrice > fiveDaysAgoPrice;
+            
+            // Check if MAs are sloping upward
+            boolean ma5Sloping = isSlopingUpward(ma5.subList(Math.max(0, ma5.size() - 5), ma5.size()));
+            boolean ma10Sloping = isSlopingUpward(ma10.subList(Math.max(0, ma10.size() - 5), ma10.size()));
+
+            // Stock is considered uptrending if it meets the majority of criteria (at least 3 out of 5)
+            int criteriaCount = 0;
+            if (priceAboveMa5) criteriaCount++;
+            if (ma5AboveMa10) criteriaCount++;
+            if (higherHigh) criteriaCount++;
+            if (ma5Sloping) criteriaCount++;
+            if (ma10Sloping) criteriaCount++;
+
+            return criteriaCount >= 3;
+
         } catch (Exception e) {
-            log.error("Error checking uptrend: {}", e.getMessage());
+            log.error("Error checking uptrend for data size {}: {}", 
+                data.size(), e.getMessage());
             return false;
         }
+    }
+
+    private List<Double> calculateMovingAverage(List<Double> prices, int period) {
+        if (prices == null || prices.size() < period) {
+            return List.of();
+        }
+
+        List<Double> movingAverages = new ArrayList<>();
+        for (int i = 0; i <= prices.size() - period; i++) {
+            double sum = 0;
+            for (int j = i; j < i + period; j++) {
+                sum += prices.get(j);
+            }
+            movingAverages.add(sum / period);
+        }
+        return movingAverages;
+    }
+
+    private boolean isSlopingUpward(List<Double> values) {
+        if (values == null || values.size() < 2) {
+            return false;
+        }
+
+        // Calculate linear regression slope
+        int n = values.size();
+        double sumX = 0;
+        double sumY = 0;
+        double sumXY = 0;
+        double sumXX = 0;
+
+        for (int i = 0; i < n; i++) {
+            double x = i;
+            double y = values.get(i);
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumXX += x * x;
+        }
+
+        // Calculate slope using least squares method
+        double slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+        
+        // Consider it upward sloping if slope is positive
+        return slope > 0;
     }
 
     public List<Stock> getAllStocks() {

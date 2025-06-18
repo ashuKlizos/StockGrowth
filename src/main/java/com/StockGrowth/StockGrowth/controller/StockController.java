@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/stocks")
+@CrossOrigin(origins = {"http://localhost:3000", "http://localhost:3001"})
 public class StockController {
 
     private final StockService stockService;
@@ -53,8 +54,16 @@ public class StockController {
     public ResponseEntity<List<StockAnalysis>> getUptrendingStocks() {
         List<StockAnalysis> analyses = stockService.analyzeStocks()
             .stream()
-            .filter(StockAnalysis::getIsUptrending)
-            .sorted(Comparator.comparing(StockAnalysis::getPriceChange30d).reversed())
+            .filter(analysis -> analysis.getIsUptrending() != null && analysis.getIsUptrending())
+            .filter(analysis -> analysis.getPriceChange30d() != null)
+            .sorted((a, b) -> {
+                Double changeA = a.getPriceChange30d();
+                Double changeB = b.getPriceChange30d();
+                if (changeA == null && changeB == null) return 0;
+                if (changeA == null) return 1;
+                if (changeB == null) return -1;
+                return changeB.compareTo(changeA); // Descending order
+            })
             .collect(Collectors.toList());
         return ResponseEntity.ok(analyses);
     }
@@ -63,9 +72,13 @@ public class StockController {
     public ResponseEntity<List<StockAnalysis>> getUnusualVolumeStocks() {
         List<StockAnalysis> analyses = stockService.analyzeStocks()
             .stream()
-            .filter(StockAnalysis::getHasUnusualVolume)
-            .sorted(Comparator.comparing((StockAnalysis analysis) -> 
-                analysis.getVolume().doubleValue() / analysis.getAverageVolume()).reversed())
+            .filter(analysis -> analysis.getHasUnusualVolume() != null && analysis.getHasUnusualVolume())
+            .filter(analysis -> analysis.getVolume() != null && analysis.getAverageVolume() != null && analysis.getAverageVolume() > 0)
+            .sorted((a, b) -> {
+                Double ratioA = a.getVolume().doubleValue() / a.getAverageVolume();
+                Double ratioB = b.getVolume().doubleValue() / b.getAverageVolume();
+                return ratioB.compareTo(ratioA); // Descending order
+            })
             .collect(Collectors.toList());
         return ResponseEntity.ok(analyses);
     }
@@ -76,16 +89,30 @@ public class StockController {
         List<StockAnalysis> analyses = stockService.analyzeStocks();
         
         Comparator<StockAnalysis> comparator = switch(period) {
-            case "1" -> Comparator.comparing(StockAnalysis::getPriceChange1d);
-            case "5" -> Comparator.comparing(StockAnalysis::getPriceChange5d);
-            default -> Comparator.comparing(StockAnalysis::getPriceChange30d);
+            case "1" -> (a, b) -> compareNullableDoubles(b.getPriceChange1d(), a.getPriceChange1d());
+            case "5" -> (a, b) -> compareNullableDoubles(b.getPriceChange5d(), a.getPriceChange5d());
+            default -> (a, b) -> compareNullableDoubles(b.getPriceChange30d(), a.getPriceChange30d());
         };
 
         List<StockAnalysis> sortedAnalyses = analyses.stream()
-            .sorted(comparator.reversed())
+            .filter(analysis -> {
+                switch(period) {
+                    case "1": return analysis.getPriceChange1d() != null;
+                    case "5": return analysis.getPriceChange5d() != null;
+                    default: return analysis.getPriceChange30d() != null;
+                }
+            })
+            .sorted(comparator)
             .collect(Collectors.toList());
 
         return ResponseEntity.ok(sortedAnalyses);
+    }
+
+    private int compareNullableDoubles(Double a, Double b) {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a.compareTo(b);
     }
 
     @GetMapping("/analyze/filter")
@@ -112,10 +139,6 @@ public class StockController {
     public ResponseEntity<List<Stock>> getAllStocks() {
         return ResponseEntity.ok(stockService.getAllStocks());
     }
-
-
-
-
 
     @GetMapping("/historical/{symbol}")
     public ResponseEntity<?> getHistoricalData(@PathVariable String symbol) {
@@ -145,4 +168,4 @@ public class StockController {
                 .body("Error getting count: " + e.getMessage());
         }
     }
-} 
+}
